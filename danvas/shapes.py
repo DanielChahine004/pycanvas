@@ -89,6 +89,37 @@ class BaseShape:
         if self._bridge:
             self._bridge.remove_shape(self.id)
 
+    # -- stacking order (z-index) ---------------------------------------------
+    # Shapes, arrows and panels share ONE global z-order in the browser, so
+    # these mirror the panel methods exactly. One structural bound: drawings
+    # and arrows render in two passes around the panels, so relative to
+    # panels a shape is either above ALL of them or below ALL of them.
+    def to_front(self):
+        """Raise this shape above everything else on the canvas, live.
+
+        Persists across reload: ``front``/``back`` also rotate the replay
+        registry, like a panel's :meth:`to_front`.
+        """
+        self._send_order("front")
+
+    def to_back(self):
+        """Lower this shape beneath everything else (panels included), live."""
+        self._send_order("back")
+
+    def forward(self):
+        """Raise this shape one step up the stack, live (not persisted —
+        use :meth:`to_front` for a durable change)."""
+        self._send_order("forward")
+
+    def backward(self):
+        """Lower this shape one step down the stack, live (not persisted —
+        use :meth:`to_back` for a durable change)."""
+        self._send_order("backward")
+
+    def _send_order(self, op):
+        if self._bridge:
+            self._bridge.reorder_component(self.id, op)
+
     # -- shared style property setters (most shapes have these) ---------------
 
     @property

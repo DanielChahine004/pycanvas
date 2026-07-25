@@ -648,21 +648,32 @@ class Bridge:
         self.broadcast({"type": "remove", "id": component_id})
 
     def reorder_component(self, component_id, op):
-        """Restack a panel (front/back/forward/backward) on every live client.
+        """Restack a record (front/back/forward/backward) on every live client.
 
-        ``front``/``back`` also move the component to the end/start of the replay
-        registry, so a client that connects or reloads rebuilds the panels in the
-        new stacking order (later-registered shapes sit on top). ``forward`` /
-        ``backward`` are a live one-step nudge only: the canvas's overlap-aware step
-        has no faithful registry equivalent, so it isn't persisted across reload.
+        Panels, managed shapes, and arrows all live in the browser's ONE
+        global z-order, so the same ``order`` frame restacks any of them —
+        ``component_id`` is looked up across all three registries.
+
+        ``front``/``back`` also move the record to the end/start of its replay
+        registry, so a client that connects or reloads rebuilds things in the
+        new stacking order (later-registered records sit on top). ``forward`` /
+        ``backward`` are a live one-step nudge only: the canvas's overlap-aware
+        step has no faithful registry equivalent, so it isn't persisted across
+        reload.
         """
-        comp = self._components.get(component_id)
-        if comp is not None and op in ("front", "back"):
-            self._components.pop(component_id)
-            if op == "front":
-                self._components[component_id] = comp  # last in -> top of stack
-            else:
-                self._components = {component_id: comp, **self._components}
+        if op in ("front", "back"):
+            for reg in (self._components, self._shapes, self._arrows):
+                obj = reg.pop(component_id, None)
+                if obj is None:
+                    continue
+                if op == "front":
+                    reg[component_id] = obj    # last in -> top of stack
+                else:
+                    rest = dict(reg)           # first in -> bottom, in place
+                    reg.clear()
+                    reg[component_id] = obj
+                    reg.update(rest)
+                break
         self.broadcast({"type": "order", "id": component_id, "op": op})
 
     def add_arrow(self, arrow):

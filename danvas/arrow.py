@@ -89,6 +89,37 @@ class Arrow:
             )
         return self
 
+    # -- stacking order (z-index) ---------------------------------------------
+    # Arrows share the browser's ONE global z-order with shapes and panels;
+    # these mirror the panel/shape methods. A fresh arrow starts on top;
+    # relative to panels an arrow is either above ALL of them or below ALL
+    # of them (drawings render in two passes around the panel layer).
+    def to_front(self):
+        """Raise this arrow above everything else on the canvas, live.
+
+        Persists across reload: ``front``/``back`` also rotate the replay
+        registry, like a panel's :meth:`to_front`.
+        """
+        self._send_order("front")
+
+    def to_back(self):
+        """Lower this arrow beneath everything else (panels included), live."""
+        self._send_order("back")
+
+    def forward(self):
+        """Raise this arrow one step up the stack, live (not persisted —
+        use :meth:`to_front` for a durable change)."""
+        self._send_order("forward")
+
+    def backward(self):
+        """Lower this arrow one step down the stack, live (not persisted —
+        use :meth:`to_back` for a durable change)."""
+        self._send_order("backward")
+
+    def _send_order(self, op):
+        if self._bridge is not None:
+            self._bridge.reorder_component(self.id, op)
+
     # -- convenience accessors for the common props --------------------------
     @property
     def color(self):

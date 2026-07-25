@@ -237,3 +237,36 @@ def test_rel_places_and_cascades_browser_side(page_state):
         "   && Math.abs(b.y - (a.y + a.props.h + 16)) < 1;"
         "}",
         arg=a["h"], timeout=15_000)
+
+
+def test_order_frame_restacks_shapes_and_arrows(page_state):
+    # Shapes and arrows live in the browser's ONE z-order (fractional index
+    # in the store), and the same `order` frame that restacks panels must
+    # restack them -- the seam behind shape.to_front()/arrow.to_back().
+    # (Record ids arrive tag-namespaced through the broker, so match by
+    # suffix rather than exact id.)
+    page, errors, src = page_state
+    src._send({"type": "shape", "id": "zs1", "shapeType": "geo",
+               "x": 900, "y": 400, "props": {"w": 120, "h": 80,
+                                             "geo": "rectangle"}})
+    src._send({"type": "shape", "id": "zs2", "shapeType": "geo",
+               "x": 940, "y": 430, "props": {"w": 120, "h": 80,
+                                             "geo": "rectangle"}})
+    src._send({"type": "arrow", "id": "za", "start": "slider",
+               "end": "label"})
+    find = ("(sfx) => [...window.__danvas.store.ids()]"
+            ".findIndex(i => i.endsWith(':' + sfx) || i === 'shape:' + sfx)")
+    page.wait_for_function(
+        "() => ['zs1','zs2','za'].every(sfx => (%s)(sfx) >= 0)" % find,
+        timeout=10_000)
+
+    src._send({"type": "order", "id": "zs1", "op": "front"})
+    page.wait_for_function(          # zs1 rose above the later-created two
+        "() => { const at = %s;"
+        " return at('zs1') > at('zs2') && at('zs1') > at('za'); }" % find,
+        timeout=10_000)
+
+    src._send({"type": "order", "id": "za", "op": "back"})
+    page.wait_for_function(          # the arrow sank to the very bottom
+        "() => (%s)('za') === 0" % find,
+        timeout=10_000)

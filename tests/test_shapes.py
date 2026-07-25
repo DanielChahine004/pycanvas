@@ -733,3 +733,62 @@ def test_shape_anchor_placed_panel_works():
     t = c.text(text="under", below=lbl)
     assert t.x == 100
     assert t.y > 100
+
+
+# ---------------------------------------------------------------------------
+# stacking order: shapes and arrows share the panel z-order API
+# ---------------------------------------------------------------------------
+def test_shape_to_front_emits_order_and_rotates_replay():
+    c = danvas.Canvas()
+    a = c.geo(x=0, y=0, name="a")
+    b = c.geo(x=50, y=0, name="b")
+    sent = []
+    c._bridge.broadcast = lambda msg: sent.append(msg)
+    a.to_front()
+    assert sent[-1] == {"type": "order", "id": a.id, "op": "front"}
+    # front/back rotate the replay registry so a reload rebuilds the new
+    # stacking (later-replayed records sit on top) — same rule as panels.
+    assert list(c._bridge._shapes) == [b.id, a.id]
+    b.to_back()
+    assert sent[-1] == {"type": "order", "id": b.id, "op": "back"}
+    assert list(c._bridge._shapes) == [b.id, a.id]
+
+
+def test_shape_forward_is_live_only():
+    c = danvas.Canvas()
+    a = c.geo(x=0, y=0, name="a")
+    c.geo(x=50, y=0, name="b")
+    sent = []
+    c._bridge.broadcast = lambda msg: sent.append(msg)
+    before = list(c._bridge._shapes)
+    a.forward()
+    a.backward()
+    assert [m["op"] for m in sent] == ["forward", "backward"]
+    assert list(c._bridge._shapes) == before   # nudges don't touch replay
+
+
+def test_arrow_to_front_emits_order_and_rotates_replay():
+    c = danvas.Canvas()
+    s1 = c.slider("s1", x=0, y=0)
+    s2 = c.slider("s2", x=0, y=200)
+    a1 = c.connect(s1, s2, name="a1")
+    a2 = c.connect(s2, s1, name="a2")
+    sent = []
+    c._bridge.broadcast = lambda msg: sent.append(msg)
+    a1.to_front()
+    assert sent[-1] == {"type": "order", "id": a1.id, "op": "front"}
+    assert list(c._bridge._arrows) == [a2.id, a1.id]
+
+
+def test_panel_reorder_still_rotates_components():
+    # The unified reorder path must keep the original panel behavior intact.
+    c = danvas.Canvas()
+    p1 = c.label("p1", "one", x=0, y=0)
+    p2 = c.label("p2", "two", x=0, y=100)
+    sent = []
+    c._bridge.broadcast = lambda msg: sent.append(msg)
+    p1.to_front()
+    assert sent[-1] == {"type": "order", "id": p1.id, "op": "front"}
+    assert list(c._bridge._components) == [p2.id, p1.id]
+    p1.to_back()
+    assert list(c._bridge._components) == [p1.id, p2.id]
