@@ -28,9 +28,12 @@ import subprocess
 import sys
 
 
-def spawn_owned(cmd, env=None):
-    """``subprocess.Popen(cmd, env=env)`` for a child that must die with us."""
-    kwargs = {}
+def spawn_owned(cmd, env=None, **popen_kwargs):
+    """``subprocess.Popen(cmd, env=env)`` for a child that must die with us.
+
+    Extra ``popen_kwargs`` pass through (e.g. ``stderr=PIPE`` so a spawner
+    can diagnose a startup failure from the child's own words)."""
+    kwargs = dict(popen_kwargs)
     if sys.platform.startswith("linux"):
         import ctypes
 

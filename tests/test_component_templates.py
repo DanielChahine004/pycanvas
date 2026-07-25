@@ -503,9 +503,9 @@ def test_serve_via_broker_desktop_opens_window_at_broker_url(monkeypatch):
         def poll(self): return None
         def terminate(self): pass
     monkeypatch.setattr("subprocess.Popen", lambda *a, **k: FakeProc())
-    monkeypatch.setattr(
-        "socket.create_connection",
-        lambda *a, **k: type("S", (), {"close": lambda self: None})())
+    # readiness is now an identity probe of the hub's HTTP routes (not a
+    # bare TCP connect) — stub the probe to say "a danvasd answers"
+    monkeypatch.setattr(remote_mod, "_probe_hub", lambda *a, **k: "danvasd")
     monkeypatch.setattr(remote_mod.SourceClient, "connect", lambda self, **k: self)
 
     c = danvas.Canvas()
@@ -539,8 +539,7 @@ def test_serve_tunnel_opens_python_owned_tunnel_to_broker_port(monkeypatch):
         def poll(self): return None
         def terminate(self): pass
     monkeypatch.setattr("subprocess.Popen", lambda *a, **k: FakeProc())
-    monkeypatch.setattr("socket.create_connection",
-                        lambda *a, **k: type("S", (), {"close": lambda self: None})())
+    monkeypatch.setattr(remote_mod, "_probe_hub", lambda *a, **k: "danvasd")
     monkeypatch.setattr(remote_mod.SourceClient, "connect", lambda self, **k: self)
 
     c = danvas.Canvas()

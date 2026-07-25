@@ -718,6 +718,11 @@ fn build_app(hub: Arc<Mutex<Hub>>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
         .route("/__auth__", post(auth_handler))
+        // Liveness + identity, unauthenticated (no viewer data): lets a
+        // spawner tell "a live danvas hub holds this port" apart from "a
+        // wedged stale broker / some other process" before dialing /ws —
+        // TCP accept alone can't (a hung broker still accepts).
+        .route("/__health__", get(health_handler))
         .route("/__describe__", get(describe_handler))
         .route("/__templates__", get(|| async {
             ([(header::CONTENT_TYPE, "application/json")], TEMPLATES)
@@ -995,6 +1000,14 @@ async fn upload_handler(
 
 /// Headless inventory of the composed canvas (the replay cache), one entry
 /// per merged panel with the cross-process identity and source liveness.
+async fn health_handler(State(hub): State<Arc<Mutex<Hub>>>) -> impl IntoResponse {
+    let h = hub.lock().unwrap();
+    axum::Json(json!({
+        "danvasd": env!("CARGO_PKG_VERSION"),
+        "run_id": h.run_id,
+    }))
+}
+
 async fn describe_handler(
     State(hub): State<Arc<Mutex<Hub>>>,
     headers: HeaderMap,

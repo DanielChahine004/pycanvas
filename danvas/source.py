@@ -110,11 +110,13 @@ class SourceClient:
 
         Returns once the first connection is up, or raises ``TimeoutError``.
         """
-        if self._thread is not None:
-            return self
-        self._dispatcher.start()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        if self._thread is None:
+            self._dispatcher.start()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        # Wait even on a repeat call: the socket loop redials in the
+        # background, so calling connect() again means "give it more time",
+        # not a no-op — that's what lets a caller retry within a budget.
         if not self._connected.wait(timeout):
             raise TimeoutError(f"could not reach the hub at {self._uri}")
         return self

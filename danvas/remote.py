@@ -575,6 +575,56 @@ class _BrokerUnavailable(RuntimeError):
     this propagates to the caller (there is no in-process fallback)."""
 
 
+_STALE_HINT = (
+    "A broker from an earlier session may be wedged on this port (common "
+    "after a hard kill — e.g. WSL2 surviving a closed terminal). Fix: kill "
+    "it and relaunch —\n"
+    "    pkill -9 -f danvasd        (Windows: taskkill /f /im danvasd.exe)\n"
+    "— or serve on a fresh port: canvas.serve(port=...)")
+
+
+def _port_accepts(port, host="127.0.0.1", timeout=0.5):
+    """Does anything at all accept TCP on ``port``? (Identity-blind — pair
+    with :func:`_probe_hub` to tell a live hub from a squatter.)"""
+    import socket as _socket
+    try:
+        _socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def _probe_hub(port, timeout=1.0, host="127.0.0.1"):
+    """What is actually listening on ``port``? Returns ``"danvasd"`` (a live
+    danvas hub — /__health__ answers, or /__templates__ on pre-0.6.5
+    brokers), ``"other"`` (something responds to HTTP but isn't a danvas
+    hub), or ``None`` (nothing answers HTTP: free port, a wedged broker
+    whose accept loop is dead, or a non-HTTP service).
+
+    A bare TCP connect can NOT stand in for this — a hung danvasd still
+    accepts TCP, which is exactly how one stale broker used to poison
+    every subsequent serve() with an undiagnosable websocket timeout.
+    """
+    import http.client
+    for path in ("/__health__", "/__templates__"):
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            try:
+                conn.request("GET", path)
+                resp = conn.getresponse()
+                body = resp.read(2048)
+            finally:
+                conn.close()
+        except Exception:
+            return None          # no HTTP response at all
+        if resp.status == 200:
+            if path == "/__health__":
+                return "danvasd" if b"danvasd" in body else "other"
+            return "danvasd"     # /__templates__ only exists on danvasd
+        # non-200: keep probing the fallback path, then classify as other
+    return "other"
+
+
 class BrokerHandle:
     """The running broker behind serve(broker=True): stop() ends it."""
 
@@ -630,7 +680,7 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
     import time as _time
     import webbrowser
 
-    import socket as _socket
+    attached = False   # dialed a hub this call didn't spawn (survivor reuse)
     if existing_port is not None:
         # A broker is already running (the hot-reload monitor owns it) — dial
         # into it instead of spawning our own. The UI lives in that danvasd, so
@@ -679,23 +729,88 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
         # process dies (atexit + a Windows kill-on-close job / Linux
         # PDEATHSIG) — an IDE stop button or a Ctrl+C landing in user code
         # must not leave a stray danvasd holding the port.
+        import collections
+        import subprocess as _subprocess
+        import sys as _sys
+        import threading as _threading
         from ._procown import spawn_owned
-        proc = spawn_owned(cmd, env=env)
+        # stderr is piped and teed: the user still sees danvasd's own words
+        # live on this console, AND a startup failure can quote them in the
+        # exception (a bind-conflict line is the definitive "port taken"
+        # signal — port probing can lie, e.g. a squatter whose backlog our
+        # own probes filled stops accepting).
+        proc = spawn_owned(cmd, env=env, stderr=_subprocess.PIPE,
+                           text=True, encoding="utf-8", errors="replace")
+        err_tail = collections.deque(maxlen=20)
+
+        def _drain():
+            pipe = getattr(proc, "stderr", None)   # absent on test fakes
+            for line in pipe or ():
+                err_tail.append(line.rstrip())
+                _sys.stderr.write(line)
+        _threading.Thread(target=_drain, daemon=True).start()
+
+        def _bind_conflict():
+            tail = " ".join(err_tail)
+            return any(m in tail for m in (
+                "os error 10048", "os error 98", "Address already in use",
+                "already in use", "each socket address"))
+
+        # Readiness = the hub ANSWERS (an HTTP round-trip on its own routes),
+        # never just TCP accept: a stale broker from a dead session still
+        # accepts TCP, so the old bare-connect probe waved through wedged
+        # brokers and every serve() after one hard kill timed out dialing a
+        # hub that would never complete a websocket handshake.
         deadline = _time.time() + 15
         while _time.time() < deadline:
-            try:
-                _socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
-                break
-            except OSError:
-                if proc.poll() is not None:
-                    # Won't launch (wrong arch, corrupt, missing lib): surface
-                    # it — serve() is broker-only, there's nothing to fall to.
+            if proc.poll() is not None:
+                # Our spawn is gone: the port is held by someone else
+                # (danvasd binds strictly and exits) or the binary won't run.
+                _time.sleep(0.2)   # let the stderr drain catch its last words
+                kind = _probe_hub(port)
+                if kind == "danvasd":
+                    # A live hub from a previous session still owns the port.
+                    # Attaching IS the designed restart path (the UI survives
+                    # the owner dying); the dial-in below re-registers this
+                    # canvas and retention swaps the panels over.
+                    print(f"[danvas] attaching to the danvasd already on "
+                          f"port {port} (previous session's hub)")
+                    proc = None
+                    attached = True
+                    break
+                said = ("\ndanvasd said: " + " | ".join(err_tail)
+                        if err_tail else "")
+                if kind == "other":
                     raise _BrokerUnavailable(
-                        f"danvasd exited on startup (code {proc.returncode})")
-                _time.sleep(0.1)
+                        f"danvasd exited on startup (code {proc.returncode}): "
+                        f"port {port} is already taken by something that is "
+                        "not a danvas hub. Pick another port "
+                        f"(canvas.serve(port=...)) or stop that process."
+                        f"{said}")
+                if _bind_conflict() or _port_accepts(port):
+                    raise _BrokerUnavailable(
+                        f"danvasd exited on startup (code {proc.returncode}): "
+                        f"port {port} is already in use by something that "
+                        f"never answers as a danvas hub.\n{_STALE_HINT}"
+                        f"{said}")
+                # Port looks free yet danvasd died: wrong arch, corrupt
+                # binary, missing lib.
+                raise _BrokerUnavailable(
+                    f"danvasd exited on startup (code {proc.returncode})."
+                    f"{said}")
+            if _probe_hub(port, timeout=0.5) == "danvasd":
+                # A survivor answers exactly like our own spawn while our
+                # doomed bind is still in flight — give the spawn a beat to
+                # lose the race so the exit branch above classifies it.
+                _time.sleep(0.2)
+                if proc.poll() is not None:
+                    continue
+                break
+            _time.sleep(0.1)
         else:
             proc.terminate()
-            raise _BrokerUnavailable("danvasd never opened its port")
+            raise _BrokerUnavailable(
+                f"danvasd never became ready on port {port} within 15s")
 
     bridge = canvas._bridge
     login = password or (next(iter(passwords.values())) if passwords else None)
@@ -729,7 +844,37 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
         except Exception:
             import traceback as _tb
             _tb.print_exc()
-    client.connect()
+    # The client's socket loop keeps redialing in the background; connect()
+    # only decides how long to WAIT for the first success. One 10s wait used
+    # to be the single roll of the dice — retry within a budget, and when it
+    # still fails say what's actually wrong (a hub that accepts TCP but never
+    # completes the websocket handshake is a stale broker, not a network
+    # blip) instead of a bare timeout.
+    connect_deadline = _time.time() + 20
+    while True:
+        try:
+            client.connect(timeout=min(7.0, max(
+                1.0, connect_deadline - _time.time())))
+            break
+        except TimeoutError:
+            if _time.time() < connect_deadline:
+                continue
+            client.close()
+            if proc is not None:
+                proc.terminate()
+            state = _probe_hub(port)
+            if state == "danvasd":
+                detail = ("the hub answers HTTP but the websocket dial-in "
+                          "keeps failing — check for a password mismatch or "
+                          "a firewall on loopback")
+            elif state is None and _port_accepts(port):
+                detail = ("something on the port accepts connections but "
+                          f"never answers.\n{_STALE_HINT}")
+            else:
+                detail = "the hub stopped responding while connecting"
+            raise TimeoutError(
+                f"could not reach the hub at ws://127.0.0.1:{port}/ws "
+                f"within 20s: {detail}") from None
     canvas._serving = True
     # Background producer loops (a camera feed, a sensor stream) run in the
     # serving process — their frames now ride the dial-in through the
@@ -741,10 +886,11 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
     view = getattr(canvas._bridge, "_view", None)
     if view:
         client._send({"type": "view", "view": view})
-    if existing_port is not None:
-        # An already-running broker (the hot-reload monitor's) was spawned
-        # without knowing this serve()'s kwargs — deliver the resolved
-        # UI-affordance gating now, before browsers typically connect.
+    if existing_port is not None or attached:
+        # An already-running broker (the hot-reload monitor's, or a previous
+        # session's survivor we attached to) was spawned without knowing this
+        # serve()'s kwargs — deliver the resolved UI-affordance gating now,
+        # before browsers typically connect.
         config = {"type": "serve_config", "uiInspector": bool(ui_inspector),
                   "uiGraveyard": bool(ui_graveyard), "cursors": bool(cursors)}
         if ui_hosting is not None:

@@ -273,24 +273,44 @@ def run_monitor(main_file, tunnel=False, port=8000, tunnel_provider="cloudflared
     # no 502. A failure to launch is non-fatal: fall back to embedded workers.
     danvasd_proc = None
     if broker:
-        from .remote import _find_danvasd
-        import socket as _socket
+        from .remote import _find_danvasd, _probe_hub, _port_accepts, \
+            _STALE_HINT
         binary = _find_danvasd()
         if binary:
             from ._procown import spawn_owned
             danvasd_proc = spawn_owned(
                 [binary, "--port", str(port), "--host", "127.0.0.1"])
+            # Readiness = the hub ANSWERS its own HTTP routes, not bare TCP
+            # accept — a wedged broker from a hard-killed session still
+            # accepts, and dialing it poisons every worker with websocket
+            # timeouts (see remote.serve_via_broker, same logic).
             _end = time.time() + 15
             up = False
             while time.time() < _end:
-                try:
-                    _socket.create_connection(("127.0.0.1", port), 0.5).close()
+                if danvasd_proc.poll() is not None:
+                    # Bind failed: someone holds the port. A LIVE danvas hub
+                    # is a previous session's survivor — reuse it (that's the
+                    # designed restart path); anything else is fatal here.
+                    if _probe_hub(port) == "danvasd":
+                        print(f"danvas hot reload: attaching to the danvasd "
+                              f"already on port {port}")
+                        danvasd_proc = None
+                        up = True
+                    elif _port_accepts(port):
+                        print("danvas hot reload: port "
+                              f"{port} is taken by something that never "
+                              f"answers.\n{_STALE_HINT}")
+                    break
+                if _probe_hub(port, timeout=0.5) == "danvasd":
+                    # A survivor answers like our own spawn while our doomed
+                    # bind is in flight — let the spawn lose the race first
+                    # so the exit branch above classifies it (attach/diagnose).
+                    time.sleep(0.2)
+                    if danvasd_proc.poll() is not None:
+                        continue
                     up = True
                     break
-                except OSError:
-                    if danvasd_proc.poll() is not None:
-                        break
-                    time.sleep(0.1)
+                time.sleep(0.1)
             if up:
                 base_env["_danvas_BROKER_PORT"] = str(port)
                 print(f"danvas hot reload: canvas at http://127.0.0.1:{port} "
@@ -298,8 +318,9 @@ def run_monitor(main_file, tunnel=False, port=8000, tunnel_provider="cloudflared
                       flush=True)
             else:
                 danvasd_proc = None
-                print("danvas hot reload: danvasd wouldn't start; "
-                      "workers serve embedded")
+                print("danvas hot reload: danvasd wouldn't start; workers "
+                      "will try to serve themselves (serving is broker-only "
+                      "— fix the port conflict above if they fail too)")
 
     _watched = "*.py" + (", " + ", ".join(watch_patterns) if watch_patterns else "")
     print(f"danvas hot reload: watching {directory} ({_watched})")
