@@ -19,7 +19,7 @@ testpaths = ["tests"]
 
 [project]
 name = "danvas"
-version = "0.6.5"
+version = "0.6.6"
 description = "A browser-based spatial canvas with UI panels defined and controlled from Python."
 readme = "README.md"
 requires-python = ">=3.9"
