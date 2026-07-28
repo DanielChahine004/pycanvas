@@ -270,3 +270,25 @@ def test_order_frame_restacks_shapes_and_arrows(page_state):
     page.wait_for_function(          # the arrow sank to the very bottom
         "() => (%s)('za') === 0" % find,
         timeout=10_000)
+
+
+def test_auto_flow_lands_below_explicit_panels(page_state):
+    # The auto-flow must not bury owner-positioned content: a panel with no
+    # x/y flows BELOW the explicitly-placed panels, not into a fixed-origin
+    # grid on top of them (user report: four unplaced plots stacked over a
+    # hand-placed intro, silently).
+    page, errors, src = page_state
+    src.register_template("floaty", "label", text="I flow")
+    page.wait_for_function(
+        "() => [...window.__danvas.store.ids()].some(i =>"
+        " (window.__danvas.store.peek(i)||{}).props?.label === 'floaty')",
+        timeout=10_000)
+    placed = page.evaluate(
+        "() => { const ps = [...window.__danvas.store.ids()]"
+        ".map(i => window.__danvas.store.peek(i))"
+        ".filter(s => s && s.typeName === 'panel');"
+        " const f = ps.find(s => s.props.label === 'floaty');"
+        " const rest = ps.filter(s => s !== f);"
+        " return { fy: f.y, maxBottom: Math.max(...rest.map("
+        "   s => s.y + (typeof s.props.h === 'number' ? s.props.h : 96))) }; }")
+    assert placed["fy"] >= placed["maxBottom"], placed

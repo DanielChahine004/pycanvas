@@ -850,7 +850,8 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
     # still fails say what's actually wrong (a hub that accepts TCP but never
     # completes the websocket handshake is a stale broker, not a network
     # blip) instead of a bare timeout.
-    connect_deadline = _time.time() + 20
+    budget = float(os.environ.get("DANVAS_CONNECT_TIMEOUT", 20))
+    connect_deadline = _time.time() + budget
     while True:
         try:
             client.connect(timeout=min(7.0, max(
@@ -859,14 +860,22 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
         except TimeoutError:
             if _time.time() < connect_deadline:
                 continue
+            # Diagnose FIRST, tear down after: probing a hub we just
+            # terminated can only ever report a corpse (the old order
+            # misdiagnosed every failure as "hub stopped responding").
+            state = _probe_hub(port)
             client.close()
             if proc is not None:
                 proc.terminate()
-            state = _probe_hub(port)
             if state == "danvasd":
-                detail = ("the hub answers HTTP but the websocket dial-in "
-                          "keeps failing — check for a password mismatch or "
-                          "a firewall on loopback")
+                detail = (
+                    "the hub is alive and answering HTTP, but this "
+                    "process never completed the websocket dial-in. "
+                    "Likely causes: a password mismatch; a loopback "
+                    "firewall; or a CPU-bound thread started before "
+                    "serve() starving the handshake thread (the dial-in "
+                    "runs on a background thread this process must get "
+                    "to schedule)")
             elif state is None and _port_accepts(port):
                 detail = ("something on the port accepts connections but "
                           f"never answers.\n{_STALE_HINT}")
@@ -874,7 +883,8 @@ def serve_via_broker(canvas, port=8000, open_browser=True, block=True,
                 detail = "the hub stopped responding while connecting"
             raise TimeoutError(
                 f"could not reach the hub at ws://127.0.0.1:{port}/ws "
-                f"within 20s: {detail}") from None
+                f"within {budget:g}s (override with $DANVAS_CONNECT_TIMEOUT)"
+                f": {detail}") from None
     canvas._serving = True
     # Background producer loops (a camera feed, a sensor stream) run in the
     # serving process — their frames now ride the dial-in through the

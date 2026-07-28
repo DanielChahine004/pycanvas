@@ -600,3 +600,16 @@ def test_danvasd_hosting_button_lan_share(monkeypatch):
         proc.terminate()
         try: proc.wait(timeout=5)
         except subprocess.TimeoutExpired: proc.kill()
+
+
+def test_custom_factory_exposes_behavior_kwargs():
+    # keep_mounted (and friends) used to ride **place invisibly — exactly the
+    # kwarg you need when writing a stateful custom panel was absent from the
+    # signature and autocomplete. Now they're named parameters end to end.
+    import inspect
+    sig = inspect.signature(danvas.Canvas.custom)
+    for kwarg in ("keep_mounted", "forward_wheel", "themed", "permissions"):
+        assert kwarg in sig.parameters, kwarg
+    c = danvas.Canvas()
+    p = c.custom(html="<b>x</b>", keep_mounted=True, forward_wheel=False)
+    assert p._keep_mounted is True and p._forward_wheel is False

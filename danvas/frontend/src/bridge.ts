@@ -70,6 +70,18 @@ let flowRowH = 0
 const flowItems = new Set<string>()
 let relayoutTimer: any = null
 
+// The auto-flow must not bury content the OWNER positioned: track the lowest
+// bottom edge of explicitly/rel-placed panels and start the flow below it.
+// Without this the flow cursor was blind to explicit panels, so a script
+// mixing a hand-placed intro with unplaced plots stacked the plots on top of
+// the intro — silently.
+let explicitBottom = FLOW_Y0
+
+function noteExplicit(y: number, h: any): void {
+  const eh = typeof h === 'number' ? h : 96
+  explicitBottom = Math.max(explicitBottom, y + eh + FLOW_GAP)
+}
+
 function nextPosition(w: any, h: any): { x: number; y: number } {
   w = typeof w === 'number' ? w : 240
   h = typeof h === 'number' ? h : 96
@@ -78,6 +90,7 @@ function nextPosition(w: any, h: any): { x: number; y: number } {
     flowY += flowRowH + FLOW_GAP
     flowRowH = 0
   }
+  if (flowX === FLOW_X0) flowY = Math.max(flowY, explicitBottom)
   const pos = { x: flowX, y: flowY }
   flowX += w + FLOW_GAP
   flowRowH = Math.max(flowRowH, h)
@@ -88,6 +101,7 @@ function resetFlow(): void {
   flowX = FLOW_X0
   flowY = FLOW_Y0
   flowRowH = 0
+  explicitBottom = FLOW_Y0
   flowItems.clear()
   armedReflows.clear()
   if (relayoutTimer) {
@@ -143,7 +157,7 @@ function relayoutFlow(): void {
     items.push({ id: shapeId, w: shape.props.w, h: shape.props.h })
   }
   if (!items.length) return
-  const pos = packMasonry(items)
+  const pos = packMasonry(items, { y0: Math.max(FLOW_Y0, explicitBottom) })
   const moves: any[] = []
   applyRemote(() => {
     for (const it of items) {
@@ -787,6 +801,8 @@ function registerComponent(msg: any): void {
     const auto = nextPosition(props.w, props.h)
     if (typeof px !== 'number') px = auto.x
     if (typeof py !== 'number') py = auto.y
+  } else {
+    noteExplicit(py, props.h)   // flow stays below owner-positioned panels
   }
 
   const rec: PanelRecord = {

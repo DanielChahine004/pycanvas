@@ -456,6 +456,15 @@ class BaseComponent:
 
     @property
     def h(self):
+        """The panel height in canvas units.
+
+        For an ``h="auto"`` panel this is the DEFAULT placeholder until a
+        browser renders the content, measures it, and reports back — then it
+        becomes the settled height (kept current across content changes).
+        Before that report the number is a guess: don't do absolute-position
+        arithmetic against it — anchor with ``below=``/``above=`` instead,
+        whose cascade is resolved browser-side after real measurement.
+        """
         return self._props.get("h")
 
     @h.setter
@@ -798,7 +807,11 @@ class BaseComponent:
     def color(self, value):
         fc = _theme.accent_hex(value) if value is not None else None
         self._frame_color = fc
-        self.set_layout(frame_color=fc)
+        # set_layout treats None as "leave unchanged" — the sentinel would
+        # swallow a clear, leaving Python reading None while browsers keep
+        # the tint forever. "" is the wire's actual clearing value (a falsy
+        # frameColor drops the tint), so translate here.
+        self.set_layout(frame_color=fc if fc is not None else "")
 
     def _init_color(self, color):
         """Store the accent color supplied at construction.

@@ -184,6 +184,10 @@ class Canvas:
         js: str | None = ...,
         name: str = ...,
         label: str | None = ...,
+        keep_mounted: bool = ...,
+        forward_wheel: bool = ...,
+        themed: bool = ...,
+        permissions: str | list[str] | None = ...,
         **place: Any,
     ) -> Custom: ...
     def file_browser(

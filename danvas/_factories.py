@@ -123,15 +123,28 @@ class _FactoryMixin:
         return self._make(Chat, name=name, label=label, **place)
 
     def custom(self, html=None, path=None, css=None, js=None, name="custom",
-               label=None, **place: Unpack[Place]):
+               label=None, keep_mounted=False, forward_wheel=True,
+               themed=False, permissions=None, **place: Unpack[Place]):
         """Insert a :class:`~danvas.Custom`. See :meth:`insert` for ``place``.
 
         ``html``/``css``/``js`` may be given as separate strings (e.g. pasted
         from uiverse.io) — they are composed into one document under the hood.
         Size the panel with ``w``/``h`` in ``place``.
+
+        ``keep_mounted=True`` keeps the iframe alive (hidden, not destroyed)
+        when scrolled out of view, so browser-local state — selections, form
+        inputs, a camera, an in-progress interaction — survives scroll-out/
+        scroll-in. Reach for it when writing a STATEFUL panel; the default
+        re-creates the document per scroll-in, which is right for cheap ones.
+        ``forward_wheel=False`` lets the panel own its wheel events (its own
+        zoom) instead of zooming the canvas; ``themed=True`` forwards the
+        live ``--pc-*`` theme variables into the document; ``permissions``
+        grants sandboxed-iframe features (e.g. ``"camera"``).
         """
         return self._make(Custom, html=html, path=path, css=css, js=js,
-                          name=name, label=label, **place)
+                          name=name, label=label, keep_mounted=keep_mounted,
+                          forward_wheel=forward_wheel, themed=themed,
+                          permissions=permissions, **place)
 
     def download(self, name="download", source=None, filename=None, text=None, label=None,
                  **place: Unpack[Place]):

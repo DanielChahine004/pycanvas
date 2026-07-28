@@ -169,3 +169,41 @@ def test_source_client_connect_waits_again_on_retry():
         client.connect(timeout=0.4)
     assert time.time() - t0 >= 0.3      # second call actually waited
     client.close()
+
+
+def test_connect_failure_probes_before_teardown(monkeypatch):
+    # The failure diagnostic must inspect the hub BEFORE closing/terminating
+    # anything (user report: probing after proc.terminate() autopsied a
+    # corpse, so every failure read "hub stopped responding" and pointed
+    # away from the real cause).
+    import danvas.remote as remote_mod
+
+    calls = []
+
+    class FakeProc:
+        pid = 1
+        stderr = None
+        def poll(self): return None
+        def terminate(self): calls.append("terminate")
+
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(remote_mod, "_find_danvasd", lambda: "/fake/danvasd")
+    probes = iter(["danvasd", "danvasd"])   # ready-probe, then diagnosis
+    monkeypatch.setattr(remote_mod, "_probe_hub",
+                        lambda *a, **k: (calls.append("probe"),
+                                         next(probes, "danvasd"))[1])
+
+    def timeout_connect(self, timeout=10.0):
+        raise TimeoutError("nope")
+    monkeypatch.setattr(remote_mod.SourceClient, "connect", timeout_connect)
+    monkeypatch.setattr(remote_mod.SourceClient, "close",
+                        lambda self: calls.append("close"))
+    monkeypatch.setenv("DANVAS_CONNECT_TIMEOUT", "0.5")
+
+    canvas = danvas.Canvas()
+    with pytest.raises(TimeoutError, match="CPU-bound thread"):
+        remote_mod.serve_via_broker(canvas, port=1, open_browser=False,
+                                    block=False)
+    diag = calls[calls.index("close") - 1] if "close" in calls else None
+    assert diag == "probe", f"probe must precede teardown, got {calls}"
+    assert calls.index("probe") < calls.index("terminate")

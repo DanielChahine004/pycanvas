@@ -191,3 +191,35 @@ def test_nested_container_places_children_correctly():
     r2 = canvas["r2"]
     assert (r1.x, r1.y) == (0, 50)
     assert (r2.x, r2.y) == (108, 50)          # 100 + gap 8
+
+
+# ---------------------------------------------------------------------------
+# color clearing (user report: color=None silently failed — set_layout's
+# None-means-unchanged sentinel swallowed the clear while Python read back
+# None, so the browser kept the tint forever)
+# ---------------------------------------------------------------------------
+def test_color_none_actually_clears_the_frame_tint():
+    canvas = danvas.Canvas()
+    p = canvas.label("tinted", "x", x=0, y=0)
+    sent = []
+    canvas._bridge.broadcast = lambda msg, **kw: sent.append(msg)
+    p.color = "#c2554d"
+    assert sent[-1]["payload"]["frameColor"] == "#c2554d"
+    p.color = None
+    # The clear must reach the wire ("" is the clearing value — a falsy
+    # frameColor drops the tint browser-side), and read-back must agree.
+    assert sent[-1]["payload"]["frameColor"] == ""
+    assert p.color is None
+
+
+def test_color_clear_survives_replay():
+    # A reconnecting browser rebuilds from the stored base layout — the
+    # cleared tint must not resurrect there either.
+    canvas = danvas.Canvas()
+    p = canvas.label("tinted", "x", x=0, y=0)
+    p.color = "#c2554d"
+    reg = canvas._bridge.register_message(p)
+    assert reg.get("frameColor") == "#c2554d"
+    p.color = None
+    reg = canvas._bridge.register_message(p)
+    assert "frameColor" not in reg

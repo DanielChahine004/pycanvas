@@ -469,7 +469,11 @@ class React(_EventRouter, BaseComponent):
         self._send_update({"post_style": th})
         # Also update _data so reconnecting clients get the right _th from the store.
         React.update(self, _th=th)
-        self.set_layout(frame_color=fc)
+        # None must CLEAR, but set_layout's None means "leave unchanged" —
+        # send "" (the wire's clearing value) instead. Same rule as the base
+        # setter; without it the tint outlived color=None while Python read
+        # back None.
+        self.set_layout(frame_color=fc if fc is not None else "")
 
     def push(self, data):
         """Stream ``data`` to the component without a re-mount.
